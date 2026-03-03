@@ -1,8 +1,17 @@
 """Bayesian foreign player prediction module.
 
-Uses posterior parameters from npb-bayes-projection's Shrinkage model
+Uses posterior parameters from npb-bayes-projection's Stan model (v1)
 to predict NPB performance for foreign players based on previous league stats.
-PyMC not required — numpy sampling with hardcoded posterior parameters.
+Stan/cmdstanpy not required — numpy sampling with hardcoded posterior parameters.
+
+Hitter model:
+    npb_wOBA = lg_avg + beta_woba * z_woba + beta_K * z_K + beta_BB * z_BB + noise
+
+Pitcher model:
+    npb_ERA = lg_avg + beta_era * z_era + beta_fip * z_fip + beta_K * z_K + beta_BB * z_BB + noise
+
+Features are standardized using training-set (2015-2019) mean/sd.
+Missing K%/BB%/FIP → z-score = 0 (= training mean, neutral contribution).
 """
 
 import csv
@@ -11,23 +20,36 @@ from pathlib import Path
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Posterior parameters (from npb-bayes-projection trace summaries)
-# Model: NPB_stat = w * (prev_stat * cf_i) + (1 - w) * league_avg + noise
-#   cf_i ~ Normal(cf_mu, cf_sigma)   (individual conversion factor)
-#   noise ~ Normal(0, sigma_obs)
+# Stan v1 posterior parameters (from npb-bayes-projection CI run 2026-03-03)
+# Each tuple is (mean, sd) of the posterior marginal
 # ---------------------------------------------------------------------------
 HITTER_PARAMS = {
-    "cf_mu": (1.635, 0.216),     # conversion factor mean (mean, sd)
-    "cf_sigma": (0.252, 0.147),  # conversion factor population sd
-    "w": (0.136, 0.066),         # shrinkage weight toward prev stats
-    "sigma_obs": (0.052, 0.008), # observation noise (wOBA scale)
+    "beta_woba": (-0.0104, 0.0073),  # 90% CI: [-0.0247, 0.0040]
+    "beta_K": (0.0043, 0.0074),      # 90% CI: [-0.0104, 0.0186]
+    "beta_BB": (-0.0050, 0.0077),    # 90% CI: [-0.0201, 0.0101]
+    "sigma": (0.0530, 0.0057),       # 90% CI: [0.0430, 0.0654]
 }
 
 PITCHER_PARAMS = {
-    "cf_mu": (0.587, 0.196),     # conversion factor mean
-    "cf_sigma": (0.283, 0.162),  # conversion factor population sd
-    "w": (0.136, 0.082),         # shrinkage weight
-    "sigma_obs": (1.11, 0.135),  # observation noise (ERA scale)
+    "beta_era": (0.0515, 0.1638),    # 90% CI: [-0.2732, 0.3686]
+    "beta_fip": (-0.1160, 0.1676),   # 90% CI: [-0.4470, 0.2096]
+    "beta_K": (-0.1828, 0.1387),     # 90% CI: [-0.4532, 0.0902]
+    "beta_BB": (0.2545, 0.1393),     # 90% CI: [-0.0196, 0.5265]
+    "sigma": (1.1007, 0.1042),       # 90% CI: [0.9146, 1.3229]
+}
+
+# Standardization params (training set 2015-2019, from player_conversion_details.csv)
+HITTER_STD = {
+    "woba_mean": 0.2576, "woba_sd": 0.0536,
+    "k_mean": 26.5531, "k_sd": 9.0861,
+    "bb_mean": 5.9938, "bb_sd": 4.1380,
+}
+
+PITCHER_STD = {
+    "era_mean": 5.7924, "era_sd": 1.7693,
+    "fip_mean": 5.1114, "fip_sd": 1.1899,
+    "k_mean": 17.9643, "k_sd": 4.4411,
+    "bb_mean": 9.8857, "bb_sd": 3.2621,
 }
 
 # Historical NPB foreign player first-year averages
@@ -54,35 +76,55 @@ def _summarize(samples: np.ndarray) -> dict:
     }
 
 
+def _zscore(val: float | None, mean: float, sd: float) -> float:
+    """Standardize a value. None → 0 (neutral, = training mean)."""
+    if val is None:
+        return 0.0
+    return (val - mean) / sd
+
+
 def predict_foreign_hitter(prev_woba: float,
                            league_avg_woba: float = 0.310,
+                           prev_K_pct: float | None = None,
+                           prev_BB_pct: float | None = None,
                            n_samples: int = _N_SAMPLES) -> dict:
     """Predict NPB wOBA for a foreign hitter with previous league stats."""
-    p = HITTER_PARAMS
-    w = np.clip(_RNG.normal(p["w"][0], p["w"][1], n_samples), 0, 1)
-    cf_mu = _RNG.normal(p["cf_mu"][0], p["cf_mu"][1], n_samples)
-    cf_sigma = np.abs(_RNG.normal(p["cf_sigma"][0], p["cf_sigma"][1], n_samples))
-    cf_i = _RNG.normal(cf_mu, cf_sigma)
-    sigma_obs = np.abs(_RNG.normal(p["sigma_obs"][0], p["sigma_obs"][1], n_samples))
+    z_w = _zscore(prev_woba, HITTER_STD["woba_mean"], HITTER_STD["woba_sd"])
+    z_k = _zscore(prev_K_pct, HITTER_STD["k_mean"], HITTER_STD["k_sd"])
+    z_bb = _zscore(prev_BB_pct, HITTER_STD["bb_mean"], HITTER_STD["bb_sd"])
 
-    npb_woba = w * (prev_woba * cf_i) + (1 - w) * league_avg_woba
-    npb_woba += _RNG.normal(0, sigma_obs)
+    p = HITTER_PARAMS
+    beta_woba = _RNG.normal(p["beta_woba"][0], p["beta_woba"][1], n_samples)
+    beta_K = _RNG.normal(p["beta_K"][0], p["beta_K"][1], n_samples)
+    beta_BB = _RNG.normal(p["beta_BB"][0], p["beta_BB"][1], n_samples)
+    sigma = np.abs(_RNG.normal(p["sigma"][0], p["sigma"][1], n_samples))
+
+    mu = league_avg_woba + beta_woba * z_w + beta_K * z_k + beta_BB * z_bb
+    npb_woba = mu + _RNG.normal(0, sigma)
     return _summarize(npb_woba)
 
 
 def predict_foreign_pitcher(prev_era: float,
                             league_avg_era: float = 3.50,
+                            prev_fip: float | None = None,
+                            prev_K_pct: float | None = None,
+                            prev_BB_pct: float | None = None,
                             n_samples: int = _N_SAMPLES) -> dict:
     """Predict NPB ERA for a foreign pitcher with previous league stats."""
-    p = PITCHER_PARAMS
-    w = np.clip(_RNG.normal(p["w"][0], p["w"][1], n_samples), 0, 1)
-    cf_mu = _RNG.normal(p["cf_mu"][0], p["cf_mu"][1], n_samples)
-    cf_sigma = np.abs(_RNG.normal(p["cf_sigma"][0], p["cf_sigma"][1], n_samples))
-    cf_i = _RNG.normal(cf_mu, cf_sigma)
-    sigma_obs = np.abs(_RNG.normal(p["sigma_obs"][0], p["sigma_obs"][1], n_samples))
+    z_e = _zscore(prev_era, PITCHER_STD["era_mean"], PITCHER_STD["era_sd"])
+    z_f = _zscore(prev_fip, PITCHER_STD["fip_mean"], PITCHER_STD["fip_sd"])
+    z_k = _zscore(prev_K_pct, PITCHER_STD["k_mean"], PITCHER_STD["k_sd"])
+    z_bb = _zscore(prev_BB_pct, PITCHER_STD["bb_mean"], PITCHER_STD["bb_sd"])
 
-    npb_era = w * (prev_era * cf_i) + (1 - w) * league_avg_era
-    npb_era += _RNG.normal(0, sigma_obs)
+    p = PITCHER_PARAMS
+    beta_era = _RNG.normal(p["beta_era"][0], p["beta_era"][1], n_samples)
+    beta_fip = _RNG.normal(p["beta_fip"][0], p["beta_fip"][1], n_samples)
+    beta_K = _RNG.normal(p["beta_K"][0], p["beta_K"][1], n_samples)
+    beta_BB = _RNG.normal(p["beta_BB"][0], p["beta_BB"][1], n_samples)
+    sigma = np.abs(_RNG.normal(p["sigma"][0], p["sigma"][1], n_samples))
+
+    mu = league_avg_era + beta_era * z_e + beta_fip * z_f + beta_K * z_k + beta_BB * z_bb
+    npb_era = mu + _RNG.normal(0, sigma)
     npb_era = np.clip(npb_era, 0, None)
     return _summarize(npb_era)
 
@@ -99,10 +141,10 @@ def predict_no_prev_stats(player_type: str,
     hist = _get_historical()
     if player_type == "hitter":
         center = hist["hitter"]["mean_woba"]
-        sigma = HITTER_PARAMS["sigma_obs"]
+        sigma = HITTER_PARAMS["sigma"]
     else:
         center = hist["pitcher"]["mean_era"]
-        sigma = PITCHER_PARAMS["sigma_obs"]
+        sigma = PITCHER_PARAMS["sigma"]
 
     sigma_s = np.abs(_RNG.normal(sigma[0], sigma[1], n_samples))
     samples = center + _RNG.normal(0, sigma_s)
@@ -112,30 +154,42 @@ def predict_no_prev_stats(player_type: str,
 
 
 def _sample_hitter_woba(prev_woba: float, lg_woba: float,
+                        prev_K_pct: float | None, prev_BB_pct: float | None,
                         n: int, rng: np.random.Generator) -> np.ndarray:
     """Sample n wOBA values from posterior for a foreign hitter."""
+    z_w = _zscore(prev_woba, HITTER_STD["woba_mean"], HITTER_STD["woba_sd"])
+    z_k = _zscore(prev_K_pct, HITTER_STD["k_mean"], HITTER_STD["k_sd"])
+    z_bb = _zscore(prev_BB_pct, HITTER_STD["bb_mean"], HITTER_STD["bb_sd"])
+
     p = HITTER_PARAMS
-    w = np.clip(rng.normal(p["w"][0], p["w"][1], n), 0, 1)
-    cf_mu = rng.normal(p["cf_mu"][0], p["cf_mu"][1], n)
-    cf_sigma = np.abs(rng.normal(p["cf_sigma"][0], p["cf_sigma"][1], n))
-    cf_i = rng.normal(cf_mu, cf_sigma)
-    sigma_obs = np.abs(rng.normal(p["sigma_obs"][0], p["sigma_obs"][1], n))
-    npb_woba = w * (prev_woba * cf_i) + (1 - w) * lg_woba
-    npb_woba += rng.normal(0, sigma_obs)
-    return npb_woba
+    beta_woba = rng.normal(p["beta_woba"][0], p["beta_woba"][1], n)
+    beta_K = rng.normal(p["beta_K"][0], p["beta_K"][1], n)
+    beta_BB = rng.normal(p["beta_BB"][0], p["beta_BB"][1], n)
+    sigma = np.abs(rng.normal(p["sigma"][0], p["sigma"][1], n))
+
+    mu = lg_woba + beta_woba * z_w + beta_K * z_k + beta_BB * z_bb
+    return mu + rng.normal(0, sigma)
 
 
 def _sample_pitcher_era(prev_era: float, lg_era: float,
+                        prev_fip: float | None,
+                        prev_K_pct: float | None, prev_BB_pct: float | None,
                         n: int, rng: np.random.Generator) -> np.ndarray:
     """Sample n ERA values from posterior for a foreign pitcher."""
+    z_e = _zscore(prev_era, PITCHER_STD["era_mean"], PITCHER_STD["era_sd"])
+    z_f = _zscore(prev_fip, PITCHER_STD["fip_mean"], PITCHER_STD["fip_sd"])
+    z_k = _zscore(prev_K_pct, PITCHER_STD["k_mean"], PITCHER_STD["k_sd"])
+    z_bb = _zscore(prev_BB_pct, PITCHER_STD["bb_mean"], PITCHER_STD["bb_sd"])
+
     p = PITCHER_PARAMS
-    w = np.clip(rng.normal(p["w"][0], p["w"][1], n), 0, 1)
-    cf_mu = rng.normal(p["cf_mu"][0], p["cf_mu"][1], n)
-    cf_sigma = np.abs(rng.normal(p["cf_sigma"][0], p["cf_sigma"][1], n))
-    cf_i = rng.normal(cf_mu, cf_sigma)
-    sigma_obs = np.abs(rng.normal(p["sigma_obs"][0], p["sigma_obs"][1], n))
-    npb_era = w * (prev_era * cf_i) + (1 - w) * lg_era
-    npb_era += rng.normal(0, sigma_obs)
+    beta_era = rng.normal(p["beta_era"][0], p["beta_era"][1], n)
+    beta_fip = rng.normal(p["beta_fip"][0], p["beta_fip"][1], n)
+    beta_K = rng.normal(p["beta_K"][0], p["beta_K"][1], n)
+    beta_BB = rng.normal(p["beta_BB"][0], p["beta_BB"][1], n)
+    sigma = np.abs(rng.normal(p["sigma"][0], p["sigma"][1], n))
+
+    mu = lg_era + beta_era * z_e + beta_fip * z_f + beta_K * z_k + beta_BB * z_bb
+    npb_era = mu + rng.normal(0, sigma)
     return np.clip(npb_era, 0, None)
 
 
@@ -148,10 +202,10 @@ def _sample_no_prev(player_type: str, lg_woba: float, lg_era: float,
     hist = _get_historical()
     if player_type == "hitter":
         center = hist["hitter"]["mean_woba"]
-        sigma = HITTER_PARAMS["sigma_obs"]
+        sigma = HITTER_PARAMS["sigma"]
     else:
         center = hist["pitcher"]["mean_era"]
-        sigma = PITCHER_PARAMS["sigma_obs"]
+        sigma = PITCHER_PARAMS["sigma"]
     sigma_s = np.abs(rng.normal(sigma[0], sigma[1], n))
     samples = center + rng.normal(0, sigma_s)
     if player_type != "hitter":
@@ -195,17 +249,24 @@ def simulate_team_wins_mc(
         if b.get("has_prev"):
             if b["type"] == "hitter":
                 prev_stat = b.get("prev_stat")
+                prev_K_pct = b.get("prev_K_pct")
+                prev_BB_pct = b.get("prev_BB_pct")
                 expected_pt = b.get("expected_pt", 400)
-                woba_samples = _sample_hitter_woba(prev_stat, lg_woba,
-                                                   n_samples, rng)
+                woba_samples = _sample_hitter_woba(
+                    prev_stat, lg_woba, prev_K_pct, prev_BB_pct,
+                    n_samples, rng)
                 wraa_samples = (woba_samples - lg_woba) / woba_scale * expected_pt
                 wraa_mean = b.get("wraa_est", 0)
                 delta_rs += (wraa_samples - wraa_mean) * rs_scale
             else:  # pitcher
                 prev_stat = b.get("prev_stat")
+                prev_fip = b.get("prev_fip")
+                prev_K_pct = b.get("prev_K_pct")
+                prev_BB_pct = b.get("prev_BB_pct")
                 expected_pt = b.get("expected_pt", 100)
-                era_samples = _sample_pitcher_era(prev_stat, lg_era,
-                                                  n_samples, rng)
+                era_samples = _sample_pitcher_era(
+                    prev_stat, lg_era, prev_fip, prev_K_pct, prev_BB_pct,
+                    n_samples, rng)
                 ra_samples = (era_samples - lg_era) * expected_pt / 9.0
                 ra_mean = b.get("ra_above_avg", 0)
                 delta_ra += (ra_samples - ra_mean) * ra_scale
@@ -263,7 +324,8 @@ def load_foreign_2026() -> list[dict]:
     with open(csv_path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            for key in ("prev_wOBA", "prev_ERA", "expected_pa", "expected_ip"):
+            for key in ("prev_wOBA", "prev_ERA", "expected_pa", "expected_ip",
+                        "prev_FIP", "prev_K_pct", "prev_BB_pct"):
                 if row.get(key):
                     try:
                         row[key] = float(row[key])
@@ -367,7 +429,11 @@ def get_foreign_predictions(lg_woba: float = 0.310,
 
         if ptype == "hitter":
             if row["prev_wOBA"] is not None:
-                pred = predict_foreign_hitter(row["prev_wOBA"], lg_woba)
+                pred = predict_foreign_hitter(
+                    row["prev_wOBA"], lg_woba,
+                    prev_K_pct=row.get("prev_K_pct"),
+                    prev_BB_pct=row.get("prev_BB_pct"),
+                )
                 pa = row["expected_pa"] or 400
                 wraa = woba_to_wraa(pred["mean"], lg_woba, woba_scale, pa)
                 wraa_hi = woba_to_wraa(pred["hdi_80"][1], lg_woba, woba_scale, pa)
@@ -390,13 +456,20 @@ def get_foreign_predictions(lg_woba: float = 0.310,
                 "type": ptype, "has_prev": has_prev,
                 "has_historical": not has_prev,
                 "prev_stat": prev_stat, "expected_pt": expected_pt,
+                "prev_K_pct": row.get("prev_K_pct"),
+                "prev_BB_pct": row.get("prev_BB_pct"),
                 "stat_label": "wOBA",
                 "stat_value": pred["mean"],
                 "stat_range": pred["hdi_80"],
             }
         else:  # pitcher
             if row["prev_ERA"] is not None:
-                pred = predict_foreign_pitcher(row["prev_ERA"], lg_era)
+                pred = predict_foreign_pitcher(
+                    row["prev_ERA"], lg_era,
+                    prev_fip=row.get("prev_FIP"),
+                    prev_K_pct=row.get("prev_K_pct"),
+                    prev_BB_pct=row.get("prev_BB_pct"),
+                )
                 ip = row["expected_ip"] or 100
                 ra_above = era_to_ra_above_avg(pred["mean"], lg_era, ip)
                 ra_hi = era_to_ra_above_avg(pred["hdi_80"][1], lg_era, ip)
@@ -419,6 +492,9 @@ def get_foreign_predictions(lg_woba: float = 0.310,
                 "type": ptype, "has_prev": has_prev,
                 "has_historical": not has_prev,
                 "prev_stat": prev_stat, "expected_pt": expected_pt,
+                "prev_fip": row.get("prev_FIP"),
+                "prev_K_pct": row.get("prev_K_pct"),
+                "prev_BB_pct": row.get("prev_BB_pct"),
                 "stat_label": "ERA",
                 "stat_value": pred["mean"],
                 "stat_range": pred["hdi_80"],
