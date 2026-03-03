@@ -1,5 +1,7 @@
 # NPB 2026 Prediction — Marcel + Bayesian Estimation
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://npb-prediction-bayes.streamlit.app/)
+
 Marcel法の予測結果をベースに、外国人選手のベイズ推定を追加した NPB 順位予測ダッシュボード。
 
 ## Marcel版との違い

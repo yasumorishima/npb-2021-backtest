@@ -363,7 +363,8 @@ def _render_standings_cards(lg: pd.DataFrame, show_range: bool = False):
           <span style="color:#aaa;font-size:10px;">.{row['pred_WPCT']:.3f}</span>
         </div>"""
 
-    components.html(f"<div>{cards}</div>", height=len(lg) * 50 + 10)
+    card_h = 60 if show_range else 50
+    components.html(f"<div>{cards}</div>", height=len(lg) * card_h + 10)
 
 
 def _render_standings_chart(lg: pd.DataFrame, show_range: bool = False):
