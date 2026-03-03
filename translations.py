@@ -17,9 +17,6 @@ TEXTS: dict[str, dict[str, str]] = {
         "pacific_league": "パ・リーグ",
         "wins_suffix": "勝",
         "losses_suffix": "敗",
-        "wpct_label": "勝率",
-        "rs_label": "得点",
-        "ra_label": "失点",
         "no_data": "データが読み込めませんでした",
         "data_source": "データソース: [プロ野球データFreak](https://baseball-data.com) / [日本野球機構 NPB](https://npb.jp)",
 
@@ -29,16 +26,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "marcel_only": "Marcel法のみ",
         "marcel_bayes": "Marcel法 + ベイズ推定",
         "pred_wins_label": "予測勝数",
-        "diff_label": "差分",
         "pred_range": "幅: {lo}〜{hi}勝",
         "pred_range_brief": "オレンジの縦線 = 予測幅。Monte Carloシミュレーション（5,000回）で算出",
-        "chart_annotation": "オレンジの縦線 = 計算外選手による予測幅",
         "standings_info": (
             "⚠️ **これは統計モデルの自動計算結果です。作者の予想・応援とは無関係です。**\n\n"
             "左列: Marcel法のみ（外国人選手はリーグ平均 wRAA=0 で計算）\n"
             "右列: Marcel法＋ベイズ推定（外国人選手の前リーグ成績を変換して加味）"
         ),
-        "missing_badge": "計算外{n}名",
         "method_expander": "予測方法の説明",
         "method_content": (
             "**Marcel法のみ（左列）**\n"
@@ -65,14 +59,10 @@ TEXTS: dict[str, dict[str, str]] = {
         "col_source": "ソース",
         "hitter": "打者",
         "pitcher": "投手",
-        "has_prev_stats": "前リーグ成績あり",
         "no_prev_stats": "前リーグ成績なし",
         "historical_foreign_note": "歴代外国人初年度平均を基準に計算",
-        "bayes_pred_hitter": "予測wOBA {val:.3f} [{lo:.3f}–{hi:.3f}]",
-        "bayes_pred_pitcher": "予測ERA {val:.2f} [{lo:.2f}–{hi:.2f}]",
         "wraa_contribution": "wRAA {val:+.1f}",
         "ra_contribution": "RA {val:+.1f}",
-        "foreign_player": "外国人",
 
         # --- Historical analysis ---
         "historical_title": "歴代NPB外国人選手 初年度分析",
@@ -101,9 +91,6 @@ TEXTS: dict[str, dict[str, str]] = {
         "pacific_league": "Pacific League",
         "wins_suffix": "W",
         "losses_suffix": "L",
-        "wpct_label": "Win%",
-        "rs_label": "RS",
-        "ra_label": "RA",
         "no_data": "Failed to load data",
         "data_source": "Data: [Baseball Data Freak](https://baseball-data.com) / [NPB Official](https://npb.jp)",
 
@@ -113,16 +100,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "marcel_only": "Marcel Only",
         "marcel_bayes": "Marcel + Bayesian",
         "pred_wins_label": "Projected Wins",
-        "diff_label": "Diff",
         "pred_range": "Range: {lo}–{hi}W",
         "pred_range_brief": "Orange bars = prediction range via Monte Carlo simulation (5,000 draws)",
-        "chart_annotation": "Orange bars = uncertainty from untracked players",
         "standings_info": (
             "⚠️ **These are automated statistical model outputs — not the author's predictions.**\n\n"
             "Left column: Marcel-only (foreign players set to league-average wRAA=0)\n"
             "Right column: Marcel + Bayesian (foreign player prior stats converted to NPB scale)"
         ),
-        "missing_badge": "{n} not projected",
         "method_expander": "Methodology",
         "method_content": (
             "**Marcel Only (left column)**\n"
@@ -149,14 +133,10 @@ TEXTS: dict[str, dict[str, str]] = {
         "col_source": "Source",
         "hitter": "Batter",
         "pitcher": "Pitcher",
-        "has_prev_stats": "Prior stats available",
         "no_prev_stats": "No prior stats",
         "historical_foreign_note": "Based on historical foreign 1st-year average",
-        "bayes_pred_hitter": "Proj. wOBA {val:.3f} [{lo:.3f}–{hi:.3f}]",
-        "bayes_pred_pitcher": "Proj. ERA {val:.2f} [{lo:.2f}–{hi:.2f}]",
         "wraa_contribution": "wRAA {val:+.1f}",
         "ra_contribution": "RA {val:+.1f}",
-        "foreign_player": "Foreign Player",
 
         # --- Historical analysis ---
         "historical_title": "Historical NPB Foreign Players — First-Year Analysis",
