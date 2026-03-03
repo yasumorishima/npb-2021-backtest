@@ -1,4 +1,5 @@
 name: Fetch Foreign Player Stats
+# Fetches FanGraphs stats (K%, BB%, FIP) for 2026 NPB foreign players
 
 on:
   workflow_dispatch:
