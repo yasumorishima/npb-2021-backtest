@@ -230,6 +230,29 @@ def _get_missing_players(data: dict) -> dict:
     return result
 
 
+@st.cache_data(ttl=3600)
+def _load_park_factors() -> dict[str, float]:
+    """Load PF_5yr (latest year) per team from npb-prediction."""
+    url = BASE_URL + "data/projections/npb_park_factors.csv"
+    try:
+        pf_df = pd.read_csv(url, encoding="utf-8-sig")
+    except Exception:
+        return {}
+    latest_year = pf_df["year"].max()
+    latest = pf_df[pf_df["year"] == latest_year][["team", "PF_5yr"]].copy()
+    return dict(zip(latest["team"], latest["PF_5yr"]))
+
+
+def _apply_park_factor(rs: float, ra: float, team: str,
+                       pf_map: dict[str, float]) -> tuple[float, float]:
+    """Remove park effect: divide RS/RA by (PF + 1) / 2."""
+    pf = pf_map.get(team)
+    if pf and pf > 0:
+        pf_factor = (pf + 1.0) / 2.0
+        return rs / pf_factor, ra / pf_factor
+    return rs, ra
+
+
 def _build_standings_marcel_only(data: dict) -> pd.DataFrame:
     """Marcel法のみの順位表（外国人選手 = wRAA=0）"""
     mh = data["marcel_hitters"]
@@ -239,6 +262,7 @@ def _build_standings_marcel_only(data: dict) -> pd.DataFrame:
 
     lg_avg_rs = 550.0
     lg_avg_ra = 550.0
+    pf_map = _load_park_factors()
 
     if "wRAA_est" not in mh.columns:
         return pd.DataFrame()
@@ -249,6 +273,7 @@ def _build_standings_marcel_only(data: dict) -> pd.DataFrame:
         p = mp[mp["team"] == team]
         rs_raw = lg_avg_rs + (h["wRAA_est"].sum() if not h.empty else 0)
         ra_raw = lg_avg_ra + ((p["ERA"] - (mp["ERA"] * mp["IP"]).sum() / mp["IP"].sum()) * p["IP"] / 9.0).sum() if not p.empty else lg_avg_ra
+        rs_raw, ra_raw = _apply_park_factor(rs_raw, ra_raw, team, pf_map)
         league = "CL" if team in CENTRAL_TEAMS else "PL"
         rows.append({"league": league, "team": team, "rs_raw": rs_raw, "ra_raw": ra_raw})
 
@@ -276,6 +301,7 @@ def _build_standings_bayes(data: dict, missing_all: dict) -> pd.DataFrame:
     lg_avg_ra = 550.0
     lg_woba, lg_era = _get_league_averages(data)
     woba_scale = 1.15
+    pf_map = _load_park_factors()
 
     if "wRAA_est" not in mh.columns:
         return pd.DataFrame()
@@ -318,6 +344,9 @@ def _build_standings_bayes(data: dict, missing_all: dict) -> pd.DataFrame:
                     rs_raw += b.get("wraa_est", 0)
                 elif b["type"] == "pitcher":
                     ra_raw += b.get("ra_above_avg", 0)
+
+        # Park factor correction
+        rs_raw, ra_raw = _apply_park_factor(rs_raw, ra_raw, team, pf_map)
 
         league = "CL" if team in CENTRAL_TEAMS else "PL"
         rows.append({
