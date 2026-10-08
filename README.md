@@ -1,3 +1,7 @@
+> **This repository has moved (2026-10-08).** This analysis (its data files were already identical to files in npb-prediction) now lives at **https://github.com/yasumorishima/npb-prediction/tree/main/research/2021-backtest**. This repository is archived (read-only) so that existing links keep working; please open issues and pull requests there.
+>
+> **このリポジトリは移転しました（2026-10-08）。** 移転先: https://github.com/yasumorishima/npb-prediction/tree/main/research/2021-backtest
+
 # NPB 2021 Backtest: ベイズ予測は「最下位→優勝」を予測できたか？
 
 2021年はヤクルト（セ・リーグ）とオリックス（パ・リーグ）が前年最下位から優勝した年。
